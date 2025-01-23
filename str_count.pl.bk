@@ -144,25 +144,10 @@ sub str_count_summary{
             my ($motif, $start, $end) = split /,/, $aim_str;
             my $motif_length   = length($motif);
             my $str_length     = length($str_identify);
-            # my $str_motif_count = $motif_length > 0 ? int($str_length / $motif_length) : 0;
-            # # Aggregate counts based on motif and motif count
-            # $hashSTR{$target}{$aim_str}{$str_motif_count}{$sample} += $reads_count;
-# 如果 motif_length=0，无法计算，直接跳过或做别的处理
-if ($motif_length == 0) {
-    # 跳过本次循环
-    next;
-}
-# 判断是否能被整除
-if ($str_length % $motif_length == 0) {
-    # 能整除则计算出 motif count
-    my $str_motif_count = $str_length / $motif_length;
-
-    # 只有在整除的情况下才累加 reads_count
-    $hashSTR{$target}{$aim_str}{$str_motif_count}{$sample} += $reads_count;
-} else {
-    # 不能整除就不加 reads_count
-    next;
-}
+            my $str_motif_count = $motif_length > 0 ? int($str_length / $motif_length) : 0;
+            # Aggregate counts based on motif and motif count
+            $hashSTR{$target}{$aim_str}{$str_motif_count}{$sample} += $reads_count;
+			
         }
         close STR;
     }
@@ -281,9 +266,7 @@ sub sub_run{
 
     # Merge
     print "1.Merge Fastq : $sample\n";
-    # system "$SOFT_FLASH -t 4 --allow-outies -m 15 -M 150 -x 0.1 -d $sample_dir -o $sample $fastq_r1 $fastq_r2 > $sample_dir/flash.log.txt 2>&1"; 
-	# M提高，能一定程度上提高短片段的合并成功数量，提高体系富集效率大约1%，但对总体来说几乎无影响
-	system "$SOFT_FLASH -t 4 --allow-outies -M 150 -d $sample_dir -o $sample $fastq_r1 $fastq_r2 > $sample_dir/flash.log.txt 2>&1";
+    system "$SOFT_FLASH -t 4 --allow-outies -m 15 -M 150 -x 0.1 -d $sample_dir -o $sample $fastq_r1 $fastq_r2 > $sample_dir/flash.log.txt 2>&1"; # M提高，能一定程度上提高短片段的合并成功数量，提高体系富集效率大约1%，但对总体来说几乎无影响
 
     # filter
     print "2.Filter Fastq : $sample \n";
@@ -292,13 +275,6 @@ sub sub_run{
     my %hashTargetFasta  = read_fasta($target_fasta);
 	# print Dumper(\%hashTargetFasta);
 	# exit;
-
-	my $not_combined_1 = "$sample_dir/$sample.notCombined_1.fastq";
-	my $not_combined_2 = "$sample_dir/$sample.notCombined_2.fastq";
-	my $no_overlap_merged = "$sample_dir/$sample.notCombined_merged.fastq";
-	# 调用函数进行无重叠合并
-	merge_no_overlap_files($not_combined_1, $not_combined_2, $no_overlap_merged);
-
     merge_fastq_analysis($target_fasta_db, \%hashTargetFasta, $sample_dir, $sample); # 合并成功reads过滤
 
     my $final_fastq = "$sample_dir/$sample.fastq";
@@ -400,11 +376,20 @@ if (@gap_positions) {
     foreach my $gap_pos (@gap_positions) {
         # 将gap_pos转换为参考序列的位置
         my $gap_ref_pos = $hit_start + $gap_pos;
+        # if ($gap_ref_pos < $str_seq_start) {
+            # # 缺口在目标区域之前，减少$str_seq_start
+            # # 假设每个缺口减少1，可根据实际插入的碱基数量调整
+            # $str_seq_start -= 1;
+        # }
+        # els
 		if ($gap_ref_pos > $str_seq_start) {
             # 缺口在目标区域之后，增加$str_seq_end
-            # 每个缺口增加1
+            # 假设每个缺口增加1，可根据实际插入的碱基数量调整
             $str_seq_end += 1;
         }
+        # 如果缺口在目标区域内部，根据需求决定如何处理
+        # 例如，可以选择将插入的碱基包括在$get_seq中，或者记录插入的位置
+        # 此处不对内部缺口进行调整，直接处理
     }
     # print "目标区域已根据缺口位置调整为：$str_seq_start 到 $str_seq_end\n";
 } else {
@@ -629,15 +614,13 @@ sub merge_fastq_analysis{
     my $sample_dir       = shift @_;
     my $sample           = shift @_;
 
-    # notCombined 也加进来
-    my $merge_fastq = "$sample_dir/$sample.extendedFrags.fastq";
-	my $no_overlap_merged = "$sample_dir/$sample.notCombined_merged.fastq";
-	system("cat $no_overlap_merged >> $merge_fastq");
+    # # notCombined 也加进来
+    # my $merge_fastq = "$sample_dir/$sample.extendedFrags.fastq";
     # system("cat $sample_dir/$sample.notCombined_1.fastq >> $merge_fastq");
     # system("cat $sample_dir/$sample.notCombined_2.fastq >> $merge_fastq");
 
     # fastq 转 fasta
-    # my $merge_fastq = "$sample_dir/$sample.extendedFrags.fastq";
+    my $merge_fastq = "$sample_dir/$sample.extendedFrags.fastq";
     my $merge_fasta = "$sample_dir/$sample.extendedFrags.fa";   
     system "$SOFT_FASTQ_TO_FASTA -Q 33 -n -i $merge_fastq -o $merge_fasta";
 
@@ -741,10 +724,9 @@ sub read_blast{
         #
         # 情况一：Reads覆盖整个目标区域
         # 条件，覆盖超过80%的区域
-        # 条件，覆盖起始位置小于开头加5，结束位置大于末尾减5 #这个没必要
+        # 条件，覆盖起始位置小于开头加5，结束位置大于末尾减5
         #
-        # if($type eq 'Merge' and $identify_len > $target_length * 0.8 and $target_start <= 5 and $target_end > $target_length - 5){
-		if($type eq 'Merge' and $identify_len > $target_length * 0.8){
+        if($type eq 'Merge' and $identify_len > $target_length * 0.8 and $target_start <= 5 and $target_end > $target_length - 5){
             $hashBlast{$reads_name}{$judge_value} = $target_name;
         }
     }
@@ -1054,111 +1036,4 @@ sub get_sample_list{
     close FASTQ_DIR;
     my $sample_list = join ",", @samples;
     return $sample_list;
-}
-
-# -----------------------------------
-# 函数：在没有任何 overlap 的情况下，将R1和R2合并
-# 参数： (1) R1.fastq，(2) R2.fastq，(3) 输出 merged.fastq
-# -----------------------------------
-sub merge_no_overlap_files {
-    my ($fq1, $fq2, $merged_out) = @_;
-
-    open my $fh1, "<", $fq1 or die "Cannot open $fq1: $!";
-    open my $fh2, "<", $fq2 or die "Cannot open $fq2: $!";
-    open my $out_fh, ">", $merged_out or die "Cannot write $merged_out: $!";
-
-    while (1) {
-        # 读取 R1 的 4 行和 R2 的 4 行
-        my @r1_lines;
-        my @r2_lines;
-        for (1..4) {
-            my $line1 = <$fh1>;
-            my $line2 = <$fh2>;
-            # 如果任一文件已读到末尾，就停止循环
-            if (!defined $line1 or !defined $line2) {
-                last;
-            }
-            chomp($line1);
-            chomp($line2);
-            push @r1_lines, $line1;
-            push @r2_lines, $line2;
-        }
-
-        # 如果读出的行不足 4 条，说明文件结束
-        last if (scalar(@r1_lines) < 4 || scalar(@r2_lines) < 4);
-
-        # 分别取出各行信息
-        my ($header1, $seq1, $plus1, $qual1) = @r1_lines;
-        my ($header2, $seq2, $plus2, $qual2) = @r2_lines;
-
-        # 对 R2 序列做反向互补（因为双端测序 R2 是反向读取）
-        my $seq2_rc = reverse($seq2);
-        $seq2_rc =~ tr/ACGTacgt/TGCAtgca/;
-        # 对应质量值也要翻转
-        my $qual2_rc = reverse($qual2);
-
-        # 找重叠长度
-        my $overlap_len = find_overlap($seq1, $seq2_rc);
-
-        # 构造新 ID（去掉 @ 或 /1 /2 等）
-        # 这里只是简单加了个 merged_ 前缀
-        my $new_id = $header1;
-        $new_id =~ s/^@//;     
-        $new_id =~ s/\/[12]$//;     # 去掉结尾 /1 或 /2
-        $new_id = "\@merged_$new_id"; 
-
-        # # 根据 overlap 不同分情况处理
-        # if ($overlap_len >= 10) {
-            # # overlap>=10，FLASH已经合并，跳过不再输出。
-            # next;
-        # }
-        # els
-		if ($overlap_len == 0) {
-            # 无重叠，直接拼接
-            my $merged_seq  = $seq1 . $seq2_rc;
-            my $merged_qual = $qual1 . $qual2_rc;
-
-            print $out_fh "$new_id\n";
-            print $out_fh "$merged_seq\n";
-            print $out_fh "+\n";
-            print $out_fh "$merged_qual\n";
-        }
-        else {
-            #   0 < overlap_len < 10
-            #   做“小重叠合并”。以下是最简单的做法：
-            #   只取 seq1 + (seq2_rc去掉重叠部分) 作为合并序列
-            #   重叠区在 seq1 中已包含，不重复写
-            #   质量值也作同样处理
-
-            # overlap_len 长度的序列，是 seq1 末端 & seq2_rc 的开头
-            my $merged_seq  = $seq1 . substr($seq2_rc,  $overlap_len);
-            my $merged_qual = $qual1 . substr($qual2_rc, $overlap_len);
-
-            print $out_fh "$new_id\n";
-            print $out_fh "$merged_seq\n";
-            print $out_fh "+\n";
-            print $out_fh "$merged_qual\n";
-        }
-    }
-
-    close $fh1;
-    close $fh2;
-    close $out_fh;
-}
-
-# -----------------------------------
-# 函数：检查 seq1 3' 和 seq2_rc 5' 的最大重叠
-# 返回重叠长度，若无重叠则返回 0
-# -----------------------------------
-sub find_overlap {
-    my ($s1, $s2) = @_;
-    my $max_check = length($s1) < length($s2) ? length($s1) : length($s2);
-    for (my $len = $max_check; $len > 0; $len--) {
-        my $end_s1   = substr($s1, length($s1) - $len, $len);
-        my $start_s2 = substr($s2, 0, $len);
-        if ($end_s1 eq $start_s2) {
-            return $len;
-        }
-    }
-    return 0;
 }

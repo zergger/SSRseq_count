@@ -11,7 +11,6 @@ use Getopt::Long;
 use Bio::SeqIO;
 use Bio::SearchIO;
 use Parallel::ForkManager;
-use Data::Dumper; # 导入Data::Dumper模块
 
 # 常量
 use constant SCRIPT_DIR => (File::Spec->splitpath(File::Spec->rel2abs($0)))[1];
@@ -37,7 +36,7 @@ die "
 Options: [required]
 
         --fastq_dir/-i                Paired-end fastq file dir
-                                      file name format: sample_name_1.fq, sample_name_2.fq
+                                      file name format: sample_name_R1.fastq.gz, sample_name_R2.fastq.gz
         --target_fasta/-t             pcr targeted fasta seq, seq name should be named as our designed. 
         --output_dir/-o               output dir
         --parallel                    how many samples will be analyzed in parallel, example : 10
@@ -138,31 +137,7 @@ sub str_count_summary{
             my $aim_str      = $hashTmp{"aim_str"};
             my $str_identify = $hashTmp{"str_identify"};
             my $reads_count  = $hashTmp{"reads_count"};
-            # $hashSTR{$target}{$aim_str}{$str_identify}{$sample} = $reads_count;
-			
-            # Parse aim_str to extract motif
-            my ($motif, $start, $end) = split /,/, $aim_str;
-            my $motif_length   = length($motif);
-            my $str_length     = length($str_identify);
-            # my $str_motif_count = $motif_length > 0 ? int($str_length / $motif_length) : 0;
-            # # Aggregate counts based on motif and motif count
-            # $hashSTR{$target}{$aim_str}{$str_motif_count}{$sample} += $reads_count;
-# 如果 motif_length=0，无法计算，直接跳过或做别的处理
-if ($motif_length == 0) {
-    # 跳过本次循环
-    next;
-}
-# 判断是否能被整除
-if ($str_length % $motif_length == 0) {
-    # 能整除则计算出 motif count
-    my $str_motif_count = $str_length / $motif_length;
-
-    # 只有在整除的情况下才累加 reads_count
-    $hashSTR{$target}{$aim_str}{$str_motif_count}{$sample} += $reads_count;
-} else {
-    # 不能整除就不加 reads_count
-    next;
-}
+            $hashSTR{$target}{$aim_str}{$str_identify}{$sample} = $reads_count;            
         }
         close STR;
     }
@@ -178,17 +153,13 @@ if ($str_length % $motif_length == 0) {
         {   
             my ($motif, $start, $end) = split /,/, $aim_str;
             my $motif_length = length($motif);
-            # foreach my $str_identify (sort keys %{$hashSTR{$target}{$aim_str}})
-			foreach my $str_motif_count (sort { $a <=> $b } keys %{ $hashSTR{$target}{$aim_str} })
+            foreach my $str_identify (sort keys %{$hashSTR{$target}{$aim_str}})
             {
-                # my $str_motif_count = int(length($str_identify) / $motif_length);
+                my $str_motif_count = length($str_identify) / $motif_length;
                 my @values = ($target, $aim_str, "$motif($str_motif_count)");
                 foreach my $sample(@samples)
                 {
-                    # my $reads_count = exists $hashSTR{$target}{$aim_str}{$str_identify}{$sample} ? $hashSTR{$target}{$aim_str}{$str_identify}{$sample} : "";
-					my $reads_count = exists $hashSTR{$target}{$aim_str}{$str_motif_count}{$sample} 
-                                      ? $hashSTR{$target}{$aim_str}{$str_motif_count}{$sample} 
-                                      : "";
+                    my $reads_count = exists $hashSTR{$target}{$aim_str}{$str_identify}{$sample} ? $hashSTR{$target}{$aim_str}{$str_identify}{$sample} : "";
                     push @values, $reads_count;
                 }
                 print OUT (join "\t", @values) . "\n";
@@ -273,32 +244,21 @@ sub quality_control{
 
 sub sub_run{
     my $sample   = shift @_;
-    my $fastq_r1 = "$fastq_dir/$sample\_1.fq.gz";
-    my $fastq_r2 = "$fastq_dir/$sample\_2.fq.gz";
+    my $fastq_r1 = "$fastq_dir/$sample\_R1.fastq.gz";
+    my $fastq_r2 = "$fastq_dir/$sample\_R2.fastq.gz";
 
     my $sample_dir = "$mapping_dir/$sample";
     make_dir($sample_dir);
 
     # Merge
     print "1.Merge Fastq : $sample\n";
-    # system "$SOFT_FLASH -t 4 --allow-outies -m 15 -M 150 -x 0.1 -d $sample_dir -o $sample $fastq_r1 $fastq_r2 > $sample_dir/flash.log.txt 2>&1"; 
-	# M提高，能一定程度上提高短片段的合并成功数量，提高体系富集效率大约1%，但对总体来说几乎无影响
-	system "$SOFT_FLASH -t 4 --allow-outies -M 150 -d $sample_dir -o $sample $fastq_r1 $fastq_r2 > $sample_dir/flash.log.txt 2>&1";
+    system "$SOFT_FLASH -t 4 --allow-outies -m 15 -M 150 -x 0.1 -d $sample_dir -o $sample $fastq_r1 $fastq_r2 > $sample_dir/flash.log.txt 2>&1"; # M提高，能一定程度上提高短片段的合并成功数量，提高体系富集效率大约1%，但对总体来说几乎无影响
 
     # filter
     print "2.Filter Fastq : $sample \n";
     my $fastq_merge_mapped    = "$sample_dir/$sample.merge.mapped.fastq";
     my $merge_reads_belong    = "$sample_dir/$sample.merge.reads.belong";
     my %hashTargetFasta  = read_fasta($target_fasta);
-	# print Dumper(\%hashTargetFasta);
-	# exit;
-
-	my $not_combined_1 = "$sample_dir/$sample.notCombined_1.fastq";
-	my $not_combined_2 = "$sample_dir/$sample.notCombined_2.fastq";
-	my $no_overlap_merged = "$sample_dir/$sample.notCombined_merged.fastq";
-	# 调用函数进行无重叠合并
-	merge_no_overlap_files($not_combined_1, $not_combined_2, $no_overlap_merged);
-
     merge_fastq_analysis($target_fasta_db, \%hashTargetFasta, $sample_dir, $sample); # 合并成功reads过滤
 
     my $final_fastq = "$sample_dir/$sample.fastq";
@@ -306,8 +266,7 @@ sub sub_run{
 
     # fastq比对
     print "3.blast final Fastq : $sample \n";
-    # my $final_blast = "$sample_dir/$sample.blast.gz";
-	my $final_blast = "$sample_dir/$sample.blast";
+    my $final_blast = "$sample_dir/$sample.blast.gz";
     blast_final($final_fastq, $merge_reads_belong, $target_fasta_db, $final_blast, $sample_dir);
 
     # str reads count 
@@ -332,23 +291,15 @@ sub str_count{
     my %hashBlastSeq; # 记录比对序列，用于后期核查
     my %hashFinishReads; # reads 已经处理完毕
     
-    # open my $fh, "gzip -cd $blast_out |";
-	open my $fh, '<', $blast_out;
+    open my $fh, "gzip -cd $blast_out |";
     my $blast_in = Bio::SearchIO->new(-fh => $fh, -format => 'blast');
     while( my $r = $blast_in->next_result ) {
         while( my $h = $r->next_hit ) {  
-            while( my $hsp = $h->next_hsp ) {
-				# print Dumper($h);
-				# print "=======我是分割线=======\n";
-				# print Dumper($hsp);
-				# exit;
+            while( my $hsp = $h->next_hsp ) {  
                 my $hit_name   = $h->name;       # 参照序列名称
                 my $query_name = $r->query_name ;# reads序列名称
                    $hit_name   =~ s/\s+//g;
                    $query_name =~ s/\s+//g;
-				   $hit_name   =~ s/\:/\|/g;
-				# print "$hit_name===$query_name\n";
-				# exit;
                 last if(exists $hashFinishReads{$query_name} ); # 该reads已经分析完毕
                 last if($hit_name ne $hashReadsBelong{$query_name}); # 该reads质控时对应的参考片段不是当前的参考片段
 
@@ -376,43 +327,16 @@ sub str_count{
                     # 比对区域没有包含目标STR区域
                     next if($str_seq_start < $hit_start or $str_seq_end > $hit_end);
                     
-                    # # 获取参照STR两端各扩展3bp，因为当indel出现时，可能会造成原始序列STR变长
-                    # my $extend = 3;
-                    # $str_seq_start = $str_seq_start - $extend;
-                    # $str_seq_end   = $str_seq_end + $extend;
+                    # 获取参照STR两端各扩展3bp，因为当indel出现时，可能会造成原始序列STR变长
+                    my $extend = 3;
+                    $str_seq_start = $str_seq_start - $extend;
+                    $str_seq_end   = $str_seq_end + $extend;
 
                     # (1) 第一步，循环遍历hit_string, 根据参考位置，提取目标STR的序列
                     my $get_seq     = ""; # 实际reads在目标STR区域的序列
                     my $before_seq  = ""; # 目标区域前面的序列
                     my $after_seq   = ""; # 目标区域后面的序列
                     my $target_pos  = $hit_start; # 参考序列上的绝对位置
-
-# 统计缺口数量及其位置
-my @gap_positions = ();
-for (my $i = 0; $i < length($hit_string); $i++) {
-    my $hit_base = substr($hit_string, $i, 1);
-    if ($hit_base eq '-') {
-        push @gap_positions, $i + 1; # 修改为1-based位置
-    }
-}
-# 处理缺口并调整目标区域
-if (@gap_positions) {
-    foreach my $gap_pos (@gap_positions) {
-        # 将gap_pos转换为参考序列的位置
-        my $gap_ref_pos = $hit_start + $gap_pos;
-		if ($gap_ref_pos > $str_seq_start) {
-            # 缺口在目标区域之后，增加$str_seq_end
-            # 每个缺口增加1
-            $str_seq_end += 1;
-        }
-    }
-    # print "目标区域已根据缺口位置调整为：$str_seq_start 到 $str_seq_end\n";
-} else {
-    # print "未检测到缺口，目标区域保持不变：$str_seq_start 到 $str_seq_end\n";
-}
-# 确保$str_seq_start和$str_seq_end的有效性
-$str_seq_start = 1 if $str_seq_start < 1;
-$str_seq_end = length($hit_string) if $str_seq_end > length($hit_string);
 
                     for(my $hit_pos = 0; $hit_pos < length($hit_string); $hit_pos++)
                     {
@@ -421,16 +345,9 @@ $str_seq_end = length($hit_string) if $str_seq_end > length($hit_string);
                         $get_seq    = $get_seq.$query_base    if($target_pos >= $str_seq_start and $target_pos <= $str_seq_end);
                         $before_seq = $before_seq.$query_base if($target_pos < $str_seq_start);
                         $after_seq  = $after_seq.$query_base  if($target_pos > $str_seq_end);
-                        # $target_pos++ if($hit_base=~/[ATCG]/i);# 只有当hit_base是碱基的时候，绝对位置向后移动一位，因为存在插入缺失，即：字符“-”
-						$target_pos++;
+                        $target_pos++ if($hit_base=~/[ATCG]/i);# 只有当hit_base是碱基的时候，绝对位置向后移动一位，因为存在插入缺失，即：字符“-”
                     }
-					# print Dumper($query_name);
-					# print Dumper($hit_name);
-					# print Dumper($hit_string);
-					# print Dumper($get_seq);
-					# print Dumper($before_seq);
-					# print Dumper($after_seq);
-					# exit;
+
                     # (2) 第二步，判定提取的序列上STR信息
                     # 去掉插入缺失字符
                     $get_seq    =~ s/[-]//g;
@@ -438,25 +355,25 @@ $str_seq_end = length($hit_string) if $str_seq_end > length($hit_string);
                     $after_seq  =~ s/[-]//g;
                     my ($str_seq, $start, $end, $str_seq_length) = get_seq_str($query_name, $get_seq, $motif, 1, 'Force'); # 获取该片段最大的STR序列,最少重复1次
 
-                    # # (3) 第三步，从目标STR区域向两侧扩展，每次左右各扩展time * motifLength 长度，因为有可能前面的extend扩展的不足
-                    # my $time     = 0; # 左右扩展次数，
-                    # my $continue = 1; # 控制是否继续循环
-                    # while($continue){
-                       # $time++;
-                       # my $cut_length    = $motif_length * $time; # 本次前后扩展长度
-                       # my $before_cutseq = (length($before_seq) <= $cut_length) ? $before_seq : substr($before_seq, length($before_seq) - $cut_length, $cut_length); # getSeq前面扩展的序列
-                       # my $after_cutseq  = (length($after_seq) <= $cut_length)  ? $after_seq : substr($after_seq, 0, $cut_length); # getSeq后面扩展的序列
-                       # my $combine_seq   = $before_cutseq.$get_seq.$after_cutseq;                  
-                       # my ($str_seq_tmp, $start_tmp, $end_tmp, $str_seq_length_tmp) = get_seq_str($query_name, $combine_seq, $motif, 1, 'Force'); # 获取扩展后该片段最大的STR序列
+                    # (3) 第三步，从目标STR区域向两侧扩展，每次左右各扩展time * motifLength 长度，因为有可能前面的extend扩展的不足
+                    my $time     = 0; # 左右扩展次数，
+                    my $continue = 1; # 控制是否继续循环
+                    while($continue){
+                       $time++;
+                       my $cut_length    = $motif_length * $time; # 本次前后扩展长度
+                       my $before_cutseq = (length($before_seq) <= $cut_length) ? $before_seq : substr($before_seq, length($before_seq) - $cut_length, $cut_length); # getSeq前面扩展的序列
+                       my $after_cutseq  = (length($after_seq) <= $cut_length)  ? $after_seq : substr($after_seq, 0, $cut_length); # getSeq后面扩展的序列
+                       my $combine_seq   = $before_cutseq.$get_seq.$after_cutseq;                  
+                       my ($str_seq_tmp, $start_tmp, $end_tmp, $str_seq_length_tmp) = get_seq_str($query_name, $combine_seq, $motif, 1, 'Force'); # 获取扩展后该片段最大的STR序列
 
-                       # # 扩展后变长
-                       # if($str_seq_length < $str_seq_length_tmp){
-                          # $str_seq_length = $str_seq_length_tmp;
-                          # $str_seq        = $str_seq_tmp;
-                       # }else{ # 扩展并不会使STR变长，离开循环
-                          # $continue = 0;
-                       # }
-                    # }
+                       # 扩展后变长
+                       if($str_seq_length < $str_seq_length_tmp){
+                          $str_seq_length = $str_seq_length_tmp;
+                          $str_seq        = $str_seq_tmp;
+                       }else{ # 扩展并不会使STR变长，离开循环
+                          $continue = 0;
+                       }
+                    }
                     # (4) 第四步，结果保存
                     if($str_seq =~ /[agtc]/ig){
                         $hashFinishReads{$query_name}++; # 记住当前reads名称，表明其已分析完毕，避免同源导致多次处理
@@ -539,11 +456,7 @@ sub blast_final{
         my ($target_name_prefix) = split /[|]/, $target_name;  # 取片段前缀作为文件名
         my $tmp_fa    = "$tmp_dir/$target_name_prefix.fa";         # 属于当前片段的reads序列
         my $tmp_limit = "$tmp_dir/$target_name_prefix.limit.txt";  # 当前片段的完整名称，用于blastn的输入
-		# 替换 $target_name 中的 | 为 :
-		my $target_name_limit = $target_name;
-		$target_name_limit =~ s/\|/:/g;
-        # system("echo '$target_name\n' > $tmp_limit");
-        system("echo '$target_name_limit\n' > $tmp_limit");
+        system("echo '$target_name\n' > $tmp_limit");
         open $hashHandle{$target_name}, ">$tmp_fa";
     }
 
@@ -577,13 +490,9 @@ sub blast_final{
         my ($target_name_prefix) = split /[\|]/, $target_name;
         my $tmp_fa    = "$tmp_dir/$target_name_prefix.fa";         # 属于当前片段的reads序列
         my $tmp_limit = "$tmp_dir/$target_name_prefix.limit.txt";  # 当前片段的名称，用于blastn的输入
-		my $tmp_limit_in = "$tmp_dir/$target_name_prefix.limit.in.txt";  # 当前片段的名称，用于blastn的输入
-        # my $tmp_blast = "$tmp_dir/$target_name_prefix.blast.gz";
-        my $tmp_blast = "$tmp_dir/$target_name_prefix.blast";
+        my $tmp_blast = "$tmp_dir/$target_name_prefix.blast.gz";
         next if(is_file_ok($tmp_fa) == 0); # 没有数据，不必再做
-        # system("$SOFT_BLASTN -task blastn -query $tmp_fa -evalue 0.00001 -db $target_fasta_db -num_threads 4 -dust no -seqidlist $tmp_limit | gzip > $tmp_blast"); # 压缩，减少存储消耗
-		system("blastdb_aliastool -seqid_file_in $tmp_limit -seqid_file_out $tmp_limit_in"); # 压缩，减少存储消耗
-        system("$SOFT_BLASTN -task blastn -query $tmp_fa -evalue 0.00001 -db $target_fasta_db -num_threads 4 -dust no -seqidlist $tmp_limit_in > $tmp_blast"); # 压缩，减少存储消耗
+        system("$SOFT_BLASTN -task blastn -query $tmp_fa -evalue 0.00001 -db $target_fasta_db -num_threads 4 -dust no -seqidlist $tmp_limit | gzip > $tmp_blast"); # 压缩，减少存储消耗
         push @blast_results, $tmp_blast;
     }   
 
@@ -629,21 +538,14 @@ sub merge_fastq_analysis{
     my $sample_dir       = shift @_;
     my $sample           = shift @_;
 
-    # notCombined 也加进来
-    my $merge_fastq = "$sample_dir/$sample.extendedFrags.fastq";
-	my $no_overlap_merged = "$sample_dir/$sample.notCombined_merged.fastq";
-	system("cat $no_overlap_merged >> $merge_fastq");
-    # system("cat $sample_dir/$sample.notCombined_1.fastq >> $merge_fastq");
-    # system("cat $sample_dir/$sample.notCombined_2.fastq >> $merge_fastq");
-
     # fastq 转 fasta
-    # my $merge_fastq = "$sample_dir/$sample.extendedFrags.fastq";
+    my $merge_fastq = "$sample_dir/$sample.extendedFrags.fastq";
     my $merge_fasta = "$sample_dir/$sample.extendedFrags.fa";   
     system "$SOFT_FASTQ_TO_FASTA -Q 33 -n -i $merge_fastq -o $merge_fasta";
 
     # blast
     my $merge_blast = "$sample_dir/$sample.extendedFrags.blast";
-    system("$SOFT_BLASTN -task blastn -query $merge_fasta -outfmt 6 -evalue 0.00001 -db $target_fasta -out $merge_blast -num_threads 4 -max_target_seqs 5 -dust no");
+    system("$SOFT_BLASTN -task blastn -query $merge_fasta -outfmt 6 -evalue 0.00001 -db $target_fasta -out $merge_blast -num_threads 4 -max_target_seqs 2 -dust no");
     
     # 筛选
     my %hashmergeFastq = read_fastq($merge_fastq);
@@ -723,28 +625,20 @@ sub read_blast{
     my %hashBlast;
     open BLAST,$blast;
     while(<BLAST>){
-		chomp; # 去除行末的换行符
-		# 替换 : 为 |
-		s/:/\|/g;
-        # $_=~ s/[\r\n]//g;
+        $_=~ s/[\r\n]//g;
         my ($reads_name, $target_name, $identify_perc, $identify_len, $mismatch, $gap, $reads_start, $reads_end, $target_start, $target_end, $evalue, $score) = split /\t/, $_;
         my @array=split(/\t/,$_);
         my $reads_length  = length( $hashFastq->{$reads_name}{2} );
         my $target_length = length( $hashTargetFasta->{$target_name} );
-		# print Dumper($reads_name);
-		# print Dumper($target_start);
-		# print Dumper($target_end);
-		# exit;
         ($target_start, $target_end) = ($target_end, $target_start) if($target_end < $target_start);
  
         my $judge_value = $identify_len; # 默认用匹配长度作为后续候选的筛选规则
         #
         # 情况一：Reads覆盖整个目标区域
         # 条件，覆盖超过80%的区域
-        # 条件，覆盖起始位置小于开头加5，结束位置大于末尾减5 #这个没必要
+        # 条件，覆盖起始位置小于开头加5，结束位置大于末尾减5
         #
-        # if($type eq 'Merge' and $identify_len > $target_length * 0.8 and $target_start <= 5 and $target_end > $target_length - 5){
-		if($type eq 'Merge' and $identify_len > $target_length * 0.8){
+        if($type eq 'Merge' and $identify_len > $target_length * 0.8 and $target_start <= 5 and $target_end > $target_length - 5){
             $hashBlast{$reads_name}{$judge_value} = $target_name;
         }
     }
@@ -769,8 +663,8 @@ sub check_fastq{
     print "[process] Check fastq \n";
     foreach my $sample(@samples)
     {
-        my $fastq_r1 = "$fastq_dir/$sample\_1.fq.gz";
-        my $fastq_r2 = "$fastq_dir/$sample\_2.fq.gz";
+        my $fastq_r1 = "$fastq_dir/$sample\_R1.fastq.gz";
+        my $fastq_r2 = "$fastq_dir/$sample\_R2.fastq.gz";
         die "[Error] lost fastq: $fastq_r1 $fastq_r2\n" if(is_file_ok($fastq_r1, $fastq_r2) == 0);
     }
 }
@@ -825,7 +719,7 @@ sub check_target_motif{
             $hashResult{$target_full_name}{$title}{'str_seq_motif_count'} = $str_seq_motif_count; # str序列含有的motif数量
             $hashResult{$target_full_name}{$title}{'target_seq_length'}   = $target_seq_length;   # 参考序列长度
             $hashResult{$target_full_name}{$title}{'str_mark'}            = "$motif($str_seq_motif_count)";   # str序列特殊表示形式
-            $hashResult{$target_full_name}{$title}{'str_seq'}             = uc($str_seq);   #$motif x $str_seq_motif_count;   # str序列
+            $hashResult{$target_full_name}{$title}{'str_seq'}             = $motif x $str_seq_motif_count;   # str序列
             $hashResult{$target_full_name}{$title}{'target_seq'}          = $target_seq;   # 参考序列
             $hashResult{$target_full_name}{$title}{'target'}              = $target_full_name;   # 片段名称
         }
@@ -919,12 +813,12 @@ sub get_aim_str{
     my $str_seq_length = length($str_seq);
 
     my $str_seq_motif_count      = $str_seq_length / $motif_length; # STR序列中包含的motif数量
-    # my ($target_seq_motif_count) = ($target_seq =~ s/$motif/$motif/ig); # 参考序列中包含的motif数量
-    # my ($str_seq_motif_count_R)  = ($str_seq =~ s/$motif/$motif/ig); # STR序列中包含的motif数量, 根据实际获取的STR序列计算
+    my ($target_seq_motif_count) = ($target_seq =~ s/$motif/$motif/ig); # 参考序列中包含的motif数量
+    my ($str_seq_motif_count_R)  = ($str_seq =~ s/$motif/$motif/ig); # STR序列中包含的motif数量, 根据实际获取的STR序列计算
     
     die "[Error] str length can not be divided by motif len!>$target_full_name\n$target_seq\n" if($str_seq_length % $motif_length!=0);# 非整数倍
-    # die "[Error] aimed STR Region Error(motif count in region $aim_start-$aim_end not equal regionLength/motifLength):>$target_full_name\n$target_seq\n" if($str_seq_motif_count != $str_seq_motif_count_R);# 指定区域的motif数量跟实际不符
-    # die "[Error] no motif exists in Seq :>$target_full_name\n$target_seq\n" if($target_seq_motif_count == 0 or $str_seq_motif_count_R == 0);# 参考序列中不含有motif
+    die "[Error] aimed STR Region Error(motif count in region $aim_start-$aim_end not equal regionLength/motifLength):>$target_full_name\n$target_seq\n" if($str_seq_motif_count != $str_seq_motif_count_R);# 指定区域的motif数量跟实际不符
+    die "[Error] no motif exists in Seq :>$target_full_name\n$target_seq\n" if($target_seq_motif_count == 0 or $str_seq_motif_count_R == 0);# 参考序列中不含有motif
         
     return ($str_seq, $aim_start, $aim_end, $str_seq_length, $str_seq_motif_count);  
 }
@@ -979,44 +873,6 @@ sub read_motif{
 
 
 # 获取序列中motif对应的最长STR
-# sub get_seq_str{
-    # my $target_full_name = shift @_;
-    # my $target_seq = shift @_;
-    # my $motif      = shift @_;
-    # my $minrep     = shift @_; # 最小重复次数
-    # my $type       = exists $_[0] ? $_[0] : 'Check';
-
-    # my $motif_length = length($motif);
-       # $minrep       = $minrep - 1;
-    # my $regexp       = "(($motif)\\2{".$minrep.",})";
-
-    # # 匹配最长str
-    # my $bestlength = 0;
-    # my $getinfo    = "";
-    # while($target_seq =~ /$regexp/ig)
-    # {
-        # my $str_seq        = $1; 
-        # my $str_seq_length = length($str_seq);
-        # my $end            = pos($target_seq);
-        # my $start          = $end - $str_seq_length + 1;
-        # my $str_seq_motif_count = $str_seq_length / $motif_length; # STR序列中包含的motif数量
- 
-        # if($str_seq_length > $bestlength)
-        # {
-           # $bestlength = $str_seq_length;
-           # $getinfo    = "$str_seq|$start|$end|$str_seq_length|$str_seq_motif_count";
-        # }
-        # pos($target_seq) = $start; # 重新设置检测起点，以单碱基步频移动  
-    # }
-    # my ($str_seq, $start, $end, $str_seq_length, $str_seq_motif_count) = ('', '', '', 0, 0);
-       # ($str_seq, $start, $end, $str_seq_length, $str_seq_motif_count) = split /\|/, $getinfo if($getinfo =~ /\w/);
-
-    # my ($target_seq_motif_count) = ($target_seq =~ s/$motif/$motif/ig); # 参考序列中包含的motif数量
-    # die "no motif '$motif' exists in Seq >$target_full_name\n$target_seq \n" if($type eq 'Check' and ($target_seq_motif_count == 0 or $bestlength == 0) ); # 参考序列中不含有motif
-    # my $str_seq_motif_perc = ($target_seq_motif_count == 0) ? 0 : sprintf "%0.4f", $str_seq_motif_count / $target_seq_motif_count;# str序列中motif占参考序列中motif数量的比例
-
-    # return ($str_seq, $start, $end, $str_seq_length, $str_seq_motif_count, $str_seq_motif_perc);
-# }
 sub get_seq_str{
     my $target_full_name = shift @_;
     my $target_seq = shift @_;
@@ -1028,18 +884,34 @@ sub get_seq_str{
        $minrep       = $minrep - 1;
     my $regexp       = "(($motif)\\2{".$minrep.",})";
 
-    my $str_seq = $target_seq;
-    # 获取起始位置（字符串的第一个字符的位置）
-    my $start = 0;
-    my $str_seq_length = length($str_seq);
-    # 获取结束位置（字符串的最后一个字符的位置）
-    my $end = $str_seq_length - 1;
-    my $str_seq_motif_count = $str_seq_length / $motif_length; # STR序列中包含的motif数量
-	
-    my $str_seq_motif_perc = sprintf("%.4f", 100);
+    # 匹配最长str
+    my $bestlength = 0;
+    my $getinfo    = "";
+    while($target_seq =~ /$regexp/ig)
+    {
+        my $str_seq        = $1; 
+        my $str_seq_length = length($str_seq);
+        my $end            = pos($target_seq);
+        my $start          = $end - $str_seq_length + 1;
+        my $str_seq_motif_count = $str_seq_length / $motif_length; # STR序列中包含的motif数量
+ 
+        if($str_seq_length > $bestlength)
+        {
+           $bestlength = $str_seq_length;
+           $getinfo    = "$str_seq|$start|$end|$str_seq_length|$str_seq_motif_count";
+        }
+        pos($target_seq) = $start; # 重新设置检测起点，以单碱基步频移动  
+    }
+    my ($str_seq, $start, $end, $str_seq_length, $str_seq_motif_count) = ('', '', '', 0, 0);
+       ($str_seq, $start, $end, $str_seq_length, $str_seq_motif_count) = split /\|/, $getinfo if($getinfo =~ /\w/);
+
+    my ($target_seq_motif_count) = ($target_seq =~ s/$motif/$motif/ig); # 参考序列中包含的motif数量
+    die "no motif '$motif' exists in Seq >$target_full_name\n$target_seq \n" if($type eq 'Check' and ($target_seq_motif_count == 0 or $bestlength == 0) ); # 参考序列中不含有motif
+    my $str_seq_motif_perc = ($target_seq_motif_count == 0) ? 0 : sprintf "%0.4f", $str_seq_motif_count / $target_seq_motif_count;# str序列中motif占参考序列中motif数量的比例
 
     return ($str_seq, $start, $end, $str_seq_length, $str_seq_motif_count, $str_seq_motif_perc);
 }
+
 
 sub get_sample_list{
     my $fastq_dir = shift @_;
@@ -1048,117 +920,10 @@ sub get_sample_list{
     opendir FASTQ_DIR, $fastq_dir;
     while(my $file = readdir FASTQ_DIR)
     {
-        my ($sample) = $file =~ /(.*)_1.fq/;
+        my ($sample) = $file =~ /(.*)_R1.fastq.gz/;
         push @samples, $sample if(defined $sample);
     }
     close FASTQ_DIR;
     my $sample_list = join ",", @samples;
     return $sample_list;
-}
-
-# -----------------------------------
-# 函数：在没有任何 overlap 的情况下，将R1和R2合并
-# 参数： (1) R1.fastq，(2) R2.fastq，(3) 输出 merged.fastq
-# -----------------------------------
-sub merge_no_overlap_files {
-    my ($fq1, $fq2, $merged_out) = @_;
-
-    open my $fh1, "<", $fq1 or die "Cannot open $fq1: $!";
-    open my $fh2, "<", $fq2 or die "Cannot open $fq2: $!";
-    open my $out_fh, ">", $merged_out or die "Cannot write $merged_out: $!";
-
-    while (1) {
-        # 读取 R1 的 4 行和 R2 的 4 行
-        my @r1_lines;
-        my @r2_lines;
-        for (1..4) {
-            my $line1 = <$fh1>;
-            my $line2 = <$fh2>;
-            # 如果任一文件已读到末尾，就停止循环
-            if (!defined $line1 or !defined $line2) {
-                last;
-            }
-            chomp($line1);
-            chomp($line2);
-            push @r1_lines, $line1;
-            push @r2_lines, $line2;
-        }
-
-        # 如果读出的行不足 4 条，说明文件结束
-        last if (scalar(@r1_lines) < 4 || scalar(@r2_lines) < 4);
-
-        # 分别取出各行信息
-        my ($header1, $seq1, $plus1, $qual1) = @r1_lines;
-        my ($header2, $seq2, $plus2, $qual2) = @r2_lines;
-
-        # 对 R2 序列做反向互补（因为双端测序 R2 是反向读取）
-        my $seq2_rc = reverse($seq2);
-        $seq2_rc =~ tr/ACGTacgt/TGCAtgca/;
-        # 对应质量值也要翻转
-        my $qual2_rc = reverse($qual2);
-
-        # 找重叠长度
-        my $overlap_len = find_overlap($seq1, $seq2_rc);
-
-        # 构造新 ID（去掉 @ 或 /1 /2 等）
-        # 这里只是简单加了个 merged_ 前缀
-        my $new_id = $header1;
-        $new_id =~ s/^@//;     
-        $new_id =~ s/\/[12]$//;     # 去掉结尾 /1 或 /2
-        $new_id = "\@merged_$new_id"; 
-
-        # # 根据 overlap 不同分情况处理
-        # if ($overlap_len >= 10) {
-            # # overlap>=10，FLASH已经合并，跳过不再输出。
-            # next;
-        # }
-        # els
-		if ($overlap_len == 0) {
-            # 无重叠，直接拼接
-            my $merged_seq  = $seq1 . $seq2_rc;
-            my $merged_qual = $qual1 . $qual2_rc;
-
-            print $out_fh "$new_id\n";
-            print $out_fh "$merged_seq\n";
-            print $out_fh "+\n";
-            print $out_fh "$merged_qual\n";
-        }
-        else {
-            #   0 < overlap_len < 10
-            #   做“小重叠合并”。以下是最简单的做法：
-            #   只取 seq1 + (seq2_rc去掉重叠部分) 作为合并序列
-            #   重叠区在 seq1 中已包含，不重复写
-            #   质量值也作同样处理
-
-            # overlap_len 长度的序列，是 seq1 末端 & seq2_rc 的开头
-            my $merged_seq  = $seq1 . substr($seq2_rc,  $overlap_len);
-            my $merged_qual = $qual1 . substr($qual2_rc, $overlap_len);
-
-            print $out_fh "$new_id\n";
-            print $out_fh "$merged_seq\n";
-            print $out_fh "+\n";
-            print $out_fh "$merged_qual\n";
-        }
-    }
-
-    close $fh1;
-    close $fh2;
-    close $out_fh;
-}
-
-# -----------------------------------
-# 函数：检查 seq1 3' 和 seq2_rc 5' 的最大重叠
-# 返回重叠长度，若无重叠则返回 0
-# -----------------------------------
-sub find_overlap {
-    my ($s1, $s2) = @_;
-    my $max_check = length($s1) < length($s2) ? length($s1) : length($s2);
-    for (my $len = $max_check; $len > 0; $len--) {
-        my $end_s1   = substr($s1, length($s1) - $len, $len);
-        my $start_s2 = substr($s2, 0, $len);
-        if ($end_s1 eq $start_s2) {
-            return $len;
-        }
-    }
-    return 0;
 }
