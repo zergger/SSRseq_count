@@ -25,6 +25,7 @@ This repository provides a modified version of the SSRseq_count tool for microsa
 | [`str_count_orig.pl`](str_count_orig.pl) | Original script from [ccoo22/SSRseq_count](https://github.com/ccoo22/SSRseq_count). |  
 | [`str_count_reg.pl`](str_count_reg.pl) | Updated version with BLAST command fixes for compatibility with modern BLAST versions. |  
 | [`str_count_ovlp.pl`](str_count_ovlp.pl) | Processes **only overlapping paired-end reads** (uses FLASH-merged reads). |  
+| [`str_count.pl`](str_count.pl) | Processes **overlapping paired-end reads** (FLASH-merged) and **non-overlapping reads**. Implements **BLAST alignment** (replacing Perl regex motif matching) for enhanced accuracy in motif determination. |
 
 ---
 
