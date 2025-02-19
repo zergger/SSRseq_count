@@ -7,8 +7,12 @@ NR == 1 {
     print $0
 }
 NR > 1 {
+    # 提取 Target 和 AimSTR 列
+    target_col = $1;
+    aim_str_col = $2;
+
     # 提取 Target 列中的数字部分和特征
-    split($1, parts, "\\|");
+    split(target_col, parts, "\\|");
     id = parts[1];
     features = parts[2];
 
@@ -32,7 +36,7 @@ NR > 1 {
 
     # 如果特征种类超过1，则根据 AimSTR 列确定新ID
     if (feature_count > 1) {
-        feature = $2;  # 根据 AimSTR 列确定特征
+        feature = aim_str_col;  # 根据 AimSTR 列确定特征
 		gsub(/^[ \t]+|[ \t]+$/, "", feature);  # 去除首尾空格
 		# print "Current feature: " feature > "/dev/stderr"  # 打印当前特征
         new_id = id "_" unique_features[feature];
